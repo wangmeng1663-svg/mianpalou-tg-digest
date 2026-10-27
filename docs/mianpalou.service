@@ -1,0 +1,13 @@
+# 本文件复制到 opensource/docs/mianpalou.service（部署到 VPS 用）
+[Unit]
+Description=MianPalou TG digest bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/mianpalou
+ExecStart=/opt/mianpalou/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
