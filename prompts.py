@@ -63,6 +63,26 @@ SYSTEM_PROMPT = """你是群聊日报编辑，负责把一群人一天的聊天�
 {"lang": "zh", "skip": false, "topics": [{"name": "BTC行情讨论", "tag": "行情", "heat": 8, "points": [{"text": "跌破65000后多数人倾向观望，认为短期继续盘整", "who": "李四"}, {"text": "有群友在64000分批建仓，止损设在62000", "who": "张三"}]}]}
 </example>"""
 
+# ============ 输出字段规范（分段/合并两处共用，唯一真源） ============
+
+OUTPUT_SPEC = """{
+  "lang": "zh",
+  "skip": false,
+  "topics": [
+    {
+      "name": "话题名，不超过10个字",
+      "tag": "行情、技术、公告、求助、闲聊、其他 六选一",
+      "heat": 8,
+      "points": [
+        {"text": "一句完整概括，不超过45字", "who": "发言者昵称，多人合议可留空"}
+      ]
+    }
+  ]
+}
+字段名必须严格是：lang / skip / topics / name / tag / heat / points / text / who。
+禁止改名（不要用 title、summary、evidence、keyword 之类的名字），禁止新增字段。
+heat 为 1-10 整数；points 每个话题 2-4 条。"""
+
 # ============ Map 提示词（记录超长时，分段提取） ============
 
 SYSTEM_RULES_SHORT = """规则：只提取原文有依据的话题；不下结论不站队；跳过政治/色情/诈骗/赌博内容；
@@ -70,13 +90,17 @@ URL 改写不照抄；不输出 @用户名；昵称可用；全水聊则 skip=tr
 
 MAP_PROMPT = """你是群聊日报编辑。以下是大群消息记录的第 {idx}/{total} 段（各段由并行任务分别处理，结果最后合并）。
 
-{SYSTEM_RULES_SHORT}
+{rules}
+
+<output_format>
+{spec}
+</output_format>
 
 <chunk>
 {chunk}
 </chunk>
 
-只输出该段的日报 JSON（格式：lang/skip/topics，字段约束与主任务一致），只提取本段真实出现的话题，宁缺毋滥。"""
+只输出该段的日报 JSON，只提取本段真实出现的话题，宁缺毋滥。"""
 
 # ============ Merge 提示词（合并各段结果） ============
 
@@ -90,6 +114,10 @@ MERGE_PROMPT = """你是群聊日报主编。下面是同一个群聊被分段�
 4. 主体语言、不下结论、跳过红线内容、不出现 URL 和 @用户名 —— 与主任务铁律一致
 5. 重新统一 lang 字段
 </task>
+
+<output_format>
+{spec}
+</output_format>
 
 <maps>
 {maps}

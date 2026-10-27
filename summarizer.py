@@ -26,15 +26,67 @@ def _build_transcript(rows) -> str:
     return "\n".join(lines)
 
 
+_TAGS = {"行情", "技术", "公告", "求助", "闲聊", "其他"}
+
+
+def _normalize(d):
+    """兜底：模型字段名漂移（title/summary/evidence）时也能出图，不让整张日报白掉。"""
+    if not isinstance(d, dict):
+        return None
+    d.setdefault("lang", "zh")
+    if not isinstance(d.get("topics"), list):
+        d["topics"], d["skip"] = [], True
+        return d
+    fixed = []
+    for t in d["topics"]:
+        if not isinstance(t, dict):
+            continue
+        name = str(t.get("name") or t.get("title") or t.get("topic") or "").strip()
+        if not name:
+            continue
+        pts = t.get("points")
+        if not isinstance(pts, list) or not pts:
+            if isinstance(t.get("summary"), str) and t["summary"].strip():
+                pts = [{"text": t["summary"], "who": ""}]
+            elif isinstance(t.get("evidence"), list):
+                pts = [{"text": str(x), "who": ""} for x in t["evidence"]]
+            else:
+                pts = []
+        points = []
+        for p in pts[:4]:
+            if isinstance(p, dict):
+                txt = str(p.get("text") or p.get("summary") or "").strip()
+                who = str(p.get("who") or p.get("user") or "").strip()
+            else:
+                txt, who = str(p).strip(), ""
+            if txt:
+                points.append({"text": txt[:60], "who": who[:20]})
+        if not points:
+            continue
+        try:
+            heat = max(1, min(10, int(t.get("heat") or 5)))
+        except Exception:
+            heat = 5
+        tag = str(t.get("tag") or "").strip()
+        fixed.append({"name": name[:20], "tag": tag if tag in _TAGS else "其他",
+                      "heat": heat, "points": points})
+    fixed.sort(key=lambda x: x["heat"], reverse=True)
+    d["topics"] = fixed[:5]
+    if not d["topics"]:
+        d["skip"] = True
+    return d
+
+
 def _parse(raw: str):
     """宽松解析 JSON，失败返回 None（静默跳过，不炸流程）。"""
     if not raw:
         return None
     try:
-        return json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
+        data = json.loads(raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```"))
     except Exception:
         log.warning("LLM 输出 JSON 解析失败: %.200s", raw)
         return None
+    return _normalize(data)
 
 
 async def _post_with_retry(url: str, headers: dict, body: dict, params: dict | None = None):
@@ -113,11 +165,14 @@ async def generate_digest(chat_title: str, rows) -> dict | None:
     for i, c in enumerate(chunks, 1):
         raw = await _call(
             prompts.SYSTEM_RULES_SHORT,
-            prompts.MAP_PROMPT.format(idx=i, total=len(chunks), chunk=c),
+            prompts.MAP_PROMPT.format(
+                idx=i, total=len(chunks), chunk=c,
+                rules=prompts.SYSTEM_RULES_SHORT, spec=prompts.OUTPUT_SPEC,
+            ),
         )
         maps.append(raw)
     merged = await _call(
         "你是群聊日报主编，按 <task> 里的规则合并 JSON，只输出最终 JSON。",
-        prompts.MERGE_PROMPT.format(maps="\n---\n".join(maps)),
+        prompts.MERGE_PROMPT.format(maps="\n---\n".join(maps), spec=prompts.OUTPUT_SPEC),
     )
     return _parse(merged)
