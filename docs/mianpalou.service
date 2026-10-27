@@ -1,4 +1,9 @@
-# 本文件复制到 opensource/docs/mianpalou.service（部署到 VPS 用）
+# 部署示例：登录 VPS 后保存为 /etc/systemd/system/mianpalou.service
+# 然后执行：
+#   systemctl daemon-reload
+#   systemctl enable --now mianpalou
+#   systemctl status mianpalou --no-pager
+# 注意：WorkingDirectory 里要放 .env（含 BOT_TOKEN / LLM Key），首次需先建好 venv 并 playwright install chromium
 [Unit]
 Description=MianPalou TG digest bot
 After=network-online.target
@@ -8,6 +13,7 @@ WorkingDirectory=/opt/mianpalou
 ExecStart=/opt/mianpalou/venv/bin/python bot.py
 Restart=always
 RestartSec=10
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
