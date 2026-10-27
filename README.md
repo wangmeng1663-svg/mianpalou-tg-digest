@@ -37,7 +37,7 @@
 ## 快速开始（自部署）
 
 ```bash
-git clone https://github.com/你的用户名/mianpalou-tg-digest.git
+git clone https://github.com/wangmeng1663-svg/mianpalou-tg-digest.git
 cd mianpalou-tg-digest
 pip install -r requirements.txt
 playwright install chromium
