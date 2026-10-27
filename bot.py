@@ -143,6 +143,10 @@ async def process_chat(context, chat_id: int, title: str, counters: dict):
         return
 
     lang = digest.get("lang", "zh")
+    src_stat = digest.pop("_src", None)  # 证据校验结果，仅日志用，不进渲染
+    if src_stat:
+        log.info("群 %s 证据校验 命中%s/丢弃%s/未验证%s", chat_id,
+                 src_stat.get("kept"), src_stat.get("dropped"), src_stat.get("unverified"))
     topics = digest.get("topics", [])[:5]
     prev_since = since - (now_ts - since)
     prev_cnt = {m["user_name"]: m["c"] for m in db.top_members(chat_id, prev_since, since)}

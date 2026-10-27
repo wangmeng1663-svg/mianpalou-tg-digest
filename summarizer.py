@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -27,16 +28,30 @@ def _build_transcript(rows) -> str:
 
 
 _TAGS = {"行情", "技术", "公告", "求助", "闲聊", "其他"}
+SRC_MIN = 4  # src 太短（如「好的」）没有证据价值，但仍算通过，只计入未验证
 
 
-def _normalize(d):
-    """兜底：模型字段名漂移（title/summary/evidence）时也能出图，不让整张日报白掉。"""
+def _flatten(s: str) -> str:
+    """去掉所有空白与常见标点差异，便于逐字比对原文。"""
+    s = (s or "").lower()
+    return re.sub(r"[\s\"'`“”‘’「」『』，。、；：！？,.;:!?()（）\[\]…~～—\-]+", "", s)
+
+
+def _normalize(d, transcript: str = ""):
+    """字段名纠偏 + src 原话校验。
+
+    src 能在 transcript 里逐字找到 → 保留（verified）
+    src 存在但对不上 → 判定为编造，**丢弃该要点**
+    src 缺失或过短 → 保留但记为 unverified（不因模型漏填字段而丢信息）
+    """
     if not isinstance(d, dict):
         return None
     d.setdefault("lang", "zh")
     if not isinstance(d.get("topics"), list):
         d["topics"], d["skip"] = [], True
         return d
+    flat = _flatten(transcript)
+    st = {"kept": 0, "dropped": 0, "unverified": 0}
     fixed = []
     for t in d["topics"]:
         if not isinstance(t, dict):
@@ -47,9 +62,9 @@ def _normalize(d):
         pts = t.get("points")
         if not isinstance(pts, list) or not pts:
             if isinstance(t.get("summary"), str) and t["summary"].strip():
-                pts = [{"text": t["summary"], "who": ""}]
+                pts = [{"text": t["summary"], "who": "", "src": ""}]
             elif isinstance(t.get("evidence"), list):
-                pts = [{"text": str(x), "who": ""} for x in t["evidence"]]
+                pts = [{"text": str(x), "who": "", "src": str(x)} for x in t["evidence"]]
             else:
                 pts = []
         points = []
@@ -57,10 +72,21 @@ def _normalize(d):
             if isinstance(p, dict):
                 txt = str(p.get("text") or p.get("summary") or "").strip()
                 who = str(p.get("who") or p.get("user") or "").strip()
+                src = str(p.get("src") or p.get("evidence") or "").strip()
             else:
-                txt, who = str(p).strip(), ""
-            if txt:
-                points.append({"text": txt[:60], "who": who[:20]})
+                txt, who, src = str(p).strip(), "", str(p).strip()
+            if not txt:
+                continue
+            if src and flat:
+                if _flatten(src) and _flatten(src) in flat:
+                    st["kept"] += 1
+                else:
+                    st["dropped"] += 1
+                    log.info("src 对不上原文，丢弃要点: text=%.30s src=%.30s", txt, src)
+                    continue
+            else:
+                st["unverified"] += 1
+            points.append({"text": txt[:60], "who": who[:20]})
         if not points:
             continue
         try:
@@ -74,10 +100,12 @@ def _normalize(d):
     d["topics"] = fixed[:5]
     if not d["topics"]:
         d["skip"] = True
+    d["_src"] = st  # 置信度指标，渲染前会被剥离
+    log.info("src 校验: 命中 %s / 丢弃 %s / 未验证 %s", st["kept"], st["dropped"], st["unverified"])
     return d
 
 
-def _parse(raw: str):
+def _parse(raw: str, transcript: str = ""):
     """宽松解析 JSON，失败返回 None（静默跳过，不炸流程）。"""
     if not raw:
         return None
@@ -86,7 +114,7 @@ def _parse(raw: str):
     except Exception:
         log.warning("LLM 输出 JSON 解析失败: %.200s", raw)
         return None
-    return _normalize(data)
+    return _normalize(data, transcript)
 
 
 async def _post_with_retry(url: str, headers: dict, body: dict, params: dict | None = None):
@@ -157,7 +185,7 @@ async def generate_digest(chat_title: str, rows) -> dict | None:
     transcript = _build_transcript(rows)
     if len(transcript) <= MAX_CHARS:
         user = f"群名：{chat_title}\n\n【消息记录】\n{transcript}"
-        return _parse(await _call(prompts.SYSTEM_PROMPT, user))
+        return _parse(await _call(prompts.SYSTEM_PROMPT, user), transcript)
 
     # 超长：分段提取 → 合并
     chunks = _chunk(transcript, MAX_CHARS)
@@ -175,4 +203,4 @@ async def generate_digest(chat_title: str, rows) -> dict | None:
         "你是群聊日报主编，按 <task> 里的规则合并 JSON，只输出最终 JSON。",
         prompts.MERGE_PROMPT.format(maps="\n---\n".join(maps), spec=prompts.OUTPUT_SPEC),
     )
-    return _parse(merged)
+    return _parse(merged, transcript)
