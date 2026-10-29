@@ -72,7 +72,7 @@ async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         return
-    u = update.effective_from_user
+    u = update.effective_user
     await notify_owner(
         context.bot,
         f"👋 有人来了：{u.first_name if u else '?'}"
@@ -237,6 +237,20 @@ async def daily_sweep(context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- 启动 ----------
 
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """兜底：任何 handler 崩了，用户至少收到一句回应，不再死寂。"""
+    log.error("未捕获异常: %s | update=%s", context.error,
+              str(update)[:200] if update else None)
+    try:
+        if isinstance(update, Update) and update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="😅 出了点小故障，请稍后再试一次。",
+            )
+    except Exception:
+        pass  # 兜底不能再炸
+
+
 def main():
     if not config.BOT_TOKEN:
         raise SystemExit("请在 .env 里填写 BOT_TOKEN")
@@ -251,6 +265,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, on_message))
     app.add_handler(ChatMemberHandler(on_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_error_handler(on_error)
     app.job_queue.run_repeating(daily_sweep, interval=900, first=20)
     log.info("免爬楼启动，发送基点 %s %d 点", config.TIMEZONE, config.DEFAULT_SEND_HOUR)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
