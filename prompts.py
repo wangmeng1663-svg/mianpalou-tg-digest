@@ -156,6 +156,9 @@ START_REPLY = (
     "· 群太冷清（不足 10 条）我不打扰\n"
     "· 全是水聊我宁可不发\n"
     "· 中/英/日/韩/俄自动识别，按群语言出图\n\n"
+    "🔓 代码已开源（MIT），可自部署：\n"
+    "tinyurl.com/28g8qwhg\n"
+    "（完整地址 github.com/wangmeng1663-svg/mianpalou-tg-digest）\n\n"
     "有问题直接在这里发消息给我。"
 )
 
