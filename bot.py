@@ -69,6 +69,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     db.save_message(chat.id, chat.title or "", (user.first_name or "?")[:32], msg.text[:500], ts=now)
     if is_new_chat:
+        log.info("新群入驻: %s (id=%s)", chat.title or chat.id, chat.id)
         await notify_owner(
             context.bot,
             f"🎉 新群报喜：{chat.title or chat.id}\n当前共 {db.distinct_chat_count()} 个群",
@@ -78,16 +79,25 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """被移出群 → 立即清空该群全部数据。"""
     mc = update.my_chat_member
-    if mc and mc.new_chat_member.status in ("left", "kicked"):
+    if not mc:
+        return
+    if mc.new_chat_member.status in ("member", "administrator"):
+        log.info("bot 被加入群: %s (id=%s) 状态=%s", mc.chat.title or "", mc.chat.id,
+                 mc.new_chat_member.status)
+    if mc.new_chat_member.status in ("left", "kicked"):
         db.delete_all(mc.chat.id)
         db.record_kick(mc.chat.id, int(time.time()))
-        log.info("已退出群 %s，数据已清空", mc.chat.id)
+        log.info("已退出群 %s (%s)，状态=%s，数据已清空", mc.chat.title or "", mc.chat.id,
+                 mc.new_chat_member.status)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != "private":
         return
     u = update.effective_user
+    log.info("有人私聊 /start: %s (@%s) id=%s",
+             u.first_name if u else "?", u.username if u and u.username else "-",
+             u.id if u else "-")
     await notify_owner(
         context.bot,
         f"👋 有人来了：{u.first_name if u else '?'}"
