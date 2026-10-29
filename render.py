@@ -173,8 +173,15 @@ def render_png(data: dict) -> bytes:
 
     html = build_html(data)
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--no-sandbox"])
-        page = browser.new_page(viewport={"width": 1080, "height": 900}, device_scale_factor=2)
+        browser = p.chromium.launch(args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",  # 1G 小机保命：不用 /dev/shm，防内存爆
+            "--disable-gpu",
+            "--disable-extensions",
+        ])
+        # device_scale_factor=1：2 倍缩放的位图内存直接翻倍，1G 小机撑不住（三次实测僵死）
+        # 1080px 宽在手机端已足够清晰
+        page = browser.new_page(viewport={"width": 1080, "height": 900}, device_scale_factor=1)
         page.set_content(html, wait_until="networkidle")
         buf = page.screenshot(full_page=True)
         browser.close()

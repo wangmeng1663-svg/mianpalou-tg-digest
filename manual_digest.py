@@ -12,11 +12,14 @@ from bot import process_chat
 
 def build_app():
     builder = Application.builder().token(config.BOT_TOKEN)
+    kw = dict(connect_timeout=20, read_timeout=60, write_timeout=60, media_write_timeout=180)
     if config.PROXY_URL:
         builder = (
-            builder.get_updates_request(HTTPXRequest(proxy=config.PROXY_URL))
-            .request(HTTPXRequest(proxy=config.PROXY_URL))
+            builder.get_updates_request(HTTPXRequest(proxy=config.PROXY_URL, **kw))
+            .request(HTTPXRequest(proxy=config.PROXY_URL, **kw))
         )
+    else:
+        builder = builder.request(HTTPXRequest(**kw))
     return builder.build()
 
 

@@ -2,6 +2,7 @@
 import asyncio
 import datetime
 import logging
+import re
 import time
 from zoneinfo import ZoneInfo
 
@@ -27,6 +28,20 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 )
 log = logging.getLogger("mianpalou")
+
+MIN_RENDER_MB = 250  # 可用内存低于此值不渲染（这台机器基线可用仅 ~320MB，阈值太严会永不渲染）
+
+
+def _mem_available_mb() -> float | None:
+    """读 Linux MemAvailable；非 Linux（本机开发）返回 None = 不设闸。"""
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return None
 TZ = ZoneInfo(config.TIMEZONE)
 
 
@@ -128,6 +143,14 @@ async def process_chat(context, chat_id: int, title: str, counters: dict):
     if len(rows) < config.MIN_MESSAGES:  # 冷场不发，消息留着滚入明天
         return
     cutoff = now_ts  # 生成期间新到的消息留给下一期
+
+    # 内存闸门：可用内存不足时跳过本轮（不删消息，留给下一期），防止渲染把 1G 小机拖死
+    avail = _mem_available_mb()
+    if avail is not None and avail < MIN_RENDER_MB:
+        log.warning("群 %s 内存不足 %.0fMB < %dMB，跳过本轮，消息留待下期", chat_id, avail, MIN_RENDER_MB)
+        counters["fail"] += 1
+        return
+
     try:
         digest = await generate_digest(title, rows)
     except Exception as e:
@@ -197,6 +220,25 @@ async def process_chat(context, chat_id: int, title: str, counters: dict):
         counters["kick"] += 1
         return
     except Exception as e:
+        msg = str(e)
+        if "migrated to supergroup" in msg.lower():
+            # 群升级成超级群：TG 换了 chat_id，把数据迁过去并立即补发一次
+            m = re.search(r"New chat id:\s*(-?\d+)", msg)
+            if m:
+                new_id = int(m.group(1))
+                log.warning("群 %s 升级为超级群，迁移数据 → %s", chat_id, new_id)
+                db.migrate_chat(chat_id, new_id)
+                try:
+                    await context.bot.send_photo(
+                        chat_id=new_id, photo=png,
+                        caption=CAPTION.format(brand=b, bot=config.BOT_USERNAME),
+                    )
+                    db.record_summary(new_id, cutoff, lang=lang, skipped=0)
+                    db.delete_since(new_id, cutoff)
+                    counters["ok"] += 1
+                    return
+                except Exception as e2:
+                    log.error("群 %s 迁移后补发仍失败: %s", new_id, e2)
         log.error("群 %s 发送失败: %s", chat_id, e)
         counters["fail"] += 1
         return
@@ -255,12 +297,17 @@ def main():
     if not config.BOT_TOKEN:
         raise SystemExit("请在 .env 里填写 BOT_TOKEN")
     builder = Application.builder().token(config.BOT_TOKEN)
+    # 图片上传走 media_write_timeout：默认 20s 在新加坡回源时不够，容易 TimedOut
+    req_kw = dict(connect_timeout=20, read_timeout=60, write_timeout=60, media_write_timeout=180)
     if config.PROXY_URL:  # 本机测试需梯子时启用；海外 VPS 上留空
         from telegram.request import HTTPXRequest
         builder = (
-            builder.get_updates_request(HTTPXRequest(proxy=config.PROXY_URL))
-            .request(HTTPXRequest(proxy=config.PROXY_URL))
+            builder.get_updates_request(HTTPXRequest(proxy=config.PROXY_URL, **req_kw))
+            .request(HTTPXRequest(proxy=config.PROXY_URL, **req_kw))
         )
+    else:
+        from telegram.request import HTTPXRequest
+        builder = builder.request(HTTPXRequest(**req_kw))
     app = builder.build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.ChatType.GROUPS & ~filters.COMMAND, on_message))

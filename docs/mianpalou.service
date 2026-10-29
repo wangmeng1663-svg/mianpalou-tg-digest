@@ -14,6 +14,10 @@ ExecStart=/opt/mianpalou/venv/bin/python bot.py
 Restart=always
 RestartSec=10
 Environment=PYTHONUNBUFFERED=1
+# 1G 小机保命：bot（含 Chromium 渲染）内存超限就杀掉重启，避免整机僵死
+MemoryHigh=500M
+MemoryMax=800M
+MemorySwapMax=512M
 
 [Install]
 WantedBy=multi-user.target

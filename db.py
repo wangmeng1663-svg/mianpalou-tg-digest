@@ -50,6 +50,27 @@ def conn() -> sqlite3.Connection:
     return _conn
 
 
+def migrate_chat(old_id: int, new_id: int):
+    """群升级为超级群后 chat_id 会变，把历史数据搬到新 id 下，避免数据作废。"""
+    c = conn()
+    c.execute("UPDATE messages SET chat_id=? WHERE chat_id=?", (new_id, old_id))
+    c.execute("UPDATE summaries SET chat_id=? WHERE chat_id=?", (new_id, old_id))
+    for r in c.execute(
+        "SELECT day, chat_title, msgs, hours, updated FROM chat_stats WHERE chat_id=?", (old_id,)
+    ).fetchall():
+        c.execute(
+            """INSERT INTO chat_stats(chat_id, day, chat_title, msgs, hours, updated)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(chat_id, day) DO UPDATE SET
+                 msgs = msgs + excluded.msgs,
+                 hours = excluded.hours,
+                 updated = MAX(updated, excluded.updated)""",
+            (new_id, r["day"], r["chat_title"], r["msgs"], r["hours"], r["updated"]),
+        )
+    c.execute("DELETE FROM chat_stats WHERE chat_id=?", (old_id,))
+    c.commit()
+
+
 def save_message(chat_id: int, title: str, user: str, text: str, ts: int):
     conn().execute(
         "INSERT INTO messages(chat_id, chat_title, user_name, text, ts) VALUES(?,?,?,?,?)",
